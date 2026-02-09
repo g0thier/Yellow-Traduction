@@ -1,11 +1,15 @@
 from io import BytesIO
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import logging
 import torch
 from transformers import MarianTokenizer, MarianMTModel
 import fitz  # PyMuPDF
 
 # CONSTANTES
+
+# Logging (Streamlit Cloud friendly)
+logger = logging.getLogger(__name__)
 
 # Choix auto du device
 if torch.backends.mps.is_available():
@@ -26,7 +30,11 @@ model  = MarianMTModel.from_pretrained(MODEL_NAME).to(DEVICE).eval()
 
 # Détecter nb de cœurs dispo et en garder 1 pour le système
 MAX_WORKERS = max(1, os.cpu_count() - 1)
-print(f"⚡ Utilisation de {MAX_WORKERS} threads pour la traduction (sur {os.cpu_count()} cœurs disponibles)")
+logger.info(
+    "Utilisation de %s threads pour la traduction (sur %s coeurs disponibles)",
+    MAX_WORKERS,
+    os.cpu_count(),
+)
 
 # FONCTIONS
 
@@ -57,7 +65,10 @@ def translate_blocks(blocks):
         for coords, text in page_blocks:
             flat_texts.append((page_idx, coords, text))
 
-    print(f"➡️ Total de {len(flat_texts)} blocs de texte à traduire (toutes pages confondues)")
+    logger.info(
+        "Total de %s blocs de texte a traduire (toutes pages confondues)",
+        len(flat_texts),
+    )
 
     # ---- 2. Créer des batches globaux ----
     batches = [(i, [t[2] for t in flat_texts[i:i+BATCH_SIZE]]) for i in range(0, len(flat_texts), BATCH_SIZE)]
@@ -75,7 +86,12 @@ def translate_blocks(blocks):
             batch_translations = future.result()
             all_translations[idx:idx+len(batch_translations)] = batch_translations
             n_batch += 1
-            print(f"  - Batch {n_batch}/{len(batches)} terminé ({round(n_batch/len(batches)*100, 2)}%)")
+            logger.info(
+                "Batch %s/%s termine (%.2f%%)",
+                n_batch,
+                len(batches),
+                round(n_batch / len(batches) * 100, 2),
+            )
 
     # ---- 4. Reconstruction des pages ----
     translated_pages = [[] for _ in range(len(blocks))]
@@ -83,8 +99,8 @@ def translate_blocks(blocks):
     for (page_idx, coords, _), trans in zip(flat_texts, all_translations):
         translated_pages[page_idx].append((coords, trans))
 
-    print(f"\n✅ Traduction terminée : {len(translated_pages)} pages traitées")
-    print("\nExemple traduction première page :", translated_pages[0][:3])
+    logger.info("Traduction terminee : %s pages traitees", len(translated_pages))
+    logger.debug("Exemple traduction premiere page : %s", translated_pages[0][:3])
     return translated_pages
 
 # Tailles de police à tester pour la mise en page 
@@ -122,13 +138,13 @@ def best_font_size(page, rect, text, sizes):
 def create_translated_pdf(doc, translated_pages, output_path):
     # ---- Application séquentielle ----
     for page_index, page in enumerate(doc):
-        print(f"📄 Traitement page {page_index+1}/{len(doc)}")
+        logger.info("Traitement page %s/%s", page_index + 1, len(doc))
         blocks = translated_pages[page_index]
 
         for coords, text in blocks:
             rect = fitz.Rect(coords)
             font_size = best_font_size(page, rect, text, sizes)
-            print(f"  - Bloc {coords} : font size optimale = {font_size}")
+            logger.debug("Bloc %s : font size optimale = %s", coords, font_size)
 
             # dessiner rectangle jaune
             page.draw_rect(rect, color=(1, 1, 0),
@@ -145,7 +161,7 @@ def create_translated_pdf(doc, translated_pages, output_path):
                 align=3
             )
 
-    print(f"\n✅ Mise en page terminée, sauvegarde du PDF traduit...")
+    logger.info("Mise en page terminee, sauvegarde du PDF traduit...")
     doc.save(output_path)
 
 
