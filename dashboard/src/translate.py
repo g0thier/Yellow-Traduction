@@ -32,35 +32,23 @@ print(f"⚡ Utilisation de {MAX_WORKERS} threads pour la traduction (sur {os.cpu
 
 # Extraction du texte d'un PDF en blocs (coordonnées + texte)
 def extract_text_blocks(doc):
-    try:
-        # Extraction des blocs de texte
-        pages_text = []
-        for page_idx, page in enumerate(doc):
-            try:
-                blocks = page.get_text("blocks")  # [(x0,y0,x1,y1,"texte",bloc_num,...)]
-                page_blocks = []
-                for b in blocks:
-                    text = b[4].strip()
-                    if len(text) >= 4:  # on ignore les bouts trop courts
-                        page_blocks.append((b[:4], text))  # coordonnées + texte
-                pages_text.append(page_blocks)
-            except Exception as e:
-                print(f"⚠️ Erreur lors de l'extraction de la page {page_idx} : {e}, page ignorée")
-                pages_text.append([])  # page vide
-        return pages_text
-    except Exception as e:
-        print(f"❌ Erreur critique lors de l'extraction du texte : {e}")
-        return []
+    # Extraction des blocs de texte
+    pages_text = []
+    for page in doc:
+        blocks = page.get_text("blocks")  # [(x0,y0,x1,y1,"texte",bloc_num,...)]
+        page_blocks = []
+        for b in blocks:
+            text = b[4].strip()
+            if len(text) >= 4:  # on ignore les bouts trop courts
+                page_blocks.append((b[:4], text))  # coordonnées + texte
+        pages_text.append(page_blocks)
+    return pages_text
 
 def translate_batch(batch):
     """Traduit un batch de textes (utilise le modèle global, partagé en RAM)."""
-    try:
-        inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(DEVICE)
-        translated = model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS)
-        return [tokenizer.decode(t, skip_special_tokens=True) for t in translated]
-    except Exception as e:
-        print(f"❌ Erreur lors de la traduction d'un batch : {e}")
-        return batch  # Retourner le texte original en cas d'erreur
+    inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(DEVICE)
+    translated = model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS)
+    return [tokenizer.decode(t, skip_special_tokens=True) for t in translated]
 
 def translate_blocks(blocks):
     # ---- 1. Aplatir toutes les pages ----
@@ -84,15 +72,10 @@ def translate_blocks(blocks):
         
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
-            try:
-                batch_translations = future.result()
-                all_translations[idx:idx+len(batch_translations)] = batch_translations
-                n_batch += 1
-                print(f"  - Batch {n_batch}/{len(batches)} terminé ({round(n_batch/len(batches)*100, 2)}%)")
-            except Exception as e:
-                print(f"❌ Erreur lors du traitement d'un batch : {e}")
-                n_batch += 1
-                # Garder les valeurs None pour ce batch
+            batch_translations = future.result()
+            all_translations[idx:idx+len(batch_translations)] = batch_translations
+            n_batch += 1
+            print(f"  - Batch {n_batch}/{len(batches)} terminé ({round(n_batch/len(batches)*100, 2)}%)")
 
     # ---- 4. Reconstruction des pages ----
     translated_pages = [[] for _ in range(len(blocks))]
@@ -115,74 +98,55 @@ sizes = (
 
 # Trouve la plus grande taille de police qui rentre dans rect (binary search).
 def best_font_size(page, rect, text, sizes):
-    try:
-        lo, hi = 0, len(sizes) - 1
-        best = sizes[-1]
+    lo, hi = 0, len(sizes) - 1
+    best = sizes[-1]
 
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            font_size = sizes[mid]
-            try:
-                rc = page.insert_textbox(
-                    rect,
-                    text,
-                    fontsize=font_size,
-                    color=(0, 0, 0),
-                    align=3,
-                    render_mode=3  # mesure uniquement
-                )
-                if rc >= 0:  # le texte tient
-                    best = font_size
-                    hi = mid - 1
-                else:  # trop grand → réduire
-                    lo = mid + 1
-            except Exception:
-                # Si l'insertion échoue, on réduit la taille
-                lo = mid + 1
-        return best
-    except Exception as e:
-        print(f"⚠️ Erreur lors du calcul de font size : {e}, utilisation de taille par défaut")
-        return 12  # taille par défaut
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        font_size = sizes[mid]
+        rc = page.insert_textbox(
+            rect,
+            text,
+            fontsize=font_size,
+            color=(0, 0, 0),
+            align=3,
+            render_mode=3  # mesure uniquement
+        )
+        if rc >= 0:  # le texte tient
+            best = font_size
+            hi = mid - 1
+        else:  # trop grand → réduire
+            lo = mid + 1
+    return best
 
 def create_translated_pdf(doc, translated_pages, output_path):
-    try:
-        # ---- Application séquentielle ----
-        for page_index, page in enumerate(doc):
-            try:
-                print(f"📄 Traitement page {page_index+1}/{len(doc)}")
-                blocks = translated_pages[page_index]
+    # ---- Application séquentielle ----
+    for page_index, page in enumerate(doc):
+        print(f"📄 Traitement page {page_index+1}/{len(doc)}")
+        blocks = translated_pages[page_index]
 
-                for coords, text in blocks:
-                    try:
-                        rect = fitz.Rect(coords)
-                        font_size = best_font_size(page, rect, text, sizes)
-                        print(f"  - Bloc {coords} : font size optimale = {font_size}")
+        for coords, text in blocks:
+            rect = fitz.Rect(coords)
+            font_size = best_font_size(page, rect, text, sizes)
+            print(f"  - Bloc {coords} : font size optimale = {font_size}")
 
-                        # dessiner rectangle jaune
-                        page.draw_rect(rect, color=(1, 1, 0),
-                                    fill=(1, 1, 0),
-                                    fill_opacity=0.9,
-                                    overlay=True)
+            # dessiner rectangle jaune
+            page.draw_rect(rect, color=(1, 1, 0),
+                        fill=(1, 1, 0),
+                        fill_opacity=0.9,
+                        overlay=True)
 
-                        # insérer texte à la bonne taille
-                        page.insert_textbox(
-                            rect,
-                            text,
-                            fontsize=font_size,
-                            color=(0, 0, 0),
-                            align=3
-                        )
-                    except Exception as e:
-                        print(f"⚠️ Erreur lors du traitement du bloc {coords} : {e}, bloc ignoré")
-                        continue
-            except Exception as e:
-                print(f"⚠️ Erreur lors du traitement de la page {page_index} : {e}, page ignorée")
-                continue
+            # insérer texte à la bonne taille
+            page.insert_textbox(
+                rect,
+                text,
+                fontsize=font_size,
+                color=(0, 0, 0),
+                align=3
+            )
 
-        print(f"\n✅ Mise en page terminée, sauvegarde du PDF traduit...")
-        doc.save(output_path)
-    except Exception as e:
-        print(f"❌ Erreur lors de la création du PDF traduit : {e}")
+    print(f"\n✅ Mise en page terminée, sauvegarde du PDF traduit...")
+    doc.save(output_path)
 
 
 def translate(uploaded_file)->BytesIO|None:
@@ -243,11 +207,11 @@ def translate(uploaded_file)->BytesIO|None:
 
         # 5. Écrire le résultat dans un BytesIO
         output_bytes = BytesIO()
-        doc.save(output_bytes, garbage=3, deflate=True)  # options facultatives mais utiles
+        doc.save(output_bytes, garbage=3, deflate=True)
+        doc.close()
         output_bytes.seek(0)
         
         return output_bytes
 
-    except Exception as e:
-        print(f"❌ Erreur lors de la traduction du PDF : {e}")
+    except Exception:
         return None
