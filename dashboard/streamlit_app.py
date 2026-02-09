@@ -3,9 +3,7 @@ from pathlib import Path
 import streamlit as st
 from src.translate import translate
 
-st.set_page_config(page_title="Yellow Traduction", 
-                   layout="centered",
-                   theme="light")
+st.set_page_config(page_title="Yellow Traduction", layout="centered")
 
 def load_css(rel_path: str):
     css_path = Path(__file__).resolve().parent / rel_path
