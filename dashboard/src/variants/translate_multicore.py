@@ -7,8 +7,15 @@ import fitz  # PyMuPDF
 
 # CONSTANTES
 
-DEVICE = "cpu"
-MAX_WORKERS = 1
+# Choix auto du device
+if torch.backends.mps.is_available():
+    DEVICE = "mps"
+elif torch.cuda.is_available():
+    DEVICE = "cuda"
+else:
+    DEVICE = "cpu"
+
+# Modèle de traduction anglais -> français
 MODEL_NAME = "Helsinki-NLP/opus-mt-en-fr"
 MAX_NEW_TOKENS = 512                           # limite sortie par ligne
 BATCH_SIZE = 8                                # taille lot traduction
@@ -16,6 +23,10 @@ BATCH_SIZE = 8                                # taille lot traduction
 # Initialisation du modèle et du tokenizer
 tokenizer  = MarianTokenizer.from_pretrained(MODEL_NAME)
 model  = MarianMTModel.from_pretrained(MODEL_NAME).to(DEVICE).eval()
+
+# Détecter nb de cœurs dispo et en garder 1 pour le système
+MAX_WORKERS = max(1, os.cpu_count() - 1)
+print(f"⚡ Utilisation de {MAX_WORKERS} threads pour la traduction (sur {os.cpu_count()} cœurs disponibles)")
 
 # FONCTIONS
 
@@ -34,11 +45,10 @@ def extract_text_blocks(doc):
     return pages_text
 
 def translate_batch(batch):
-    """Traduit un batch de textes (mode inférence)."""
-    with torch.inference_mode():  # (ou torch.no_grad())
-        inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(DEVICE)
-        translated = model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS)
-        return [tokenizer.decode(t, skip_special_tokens=True) for t in translated]
+    """Traduit un batch de textes (utilise le modèle global, partagé en RAM)."""
+    inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(DEVICE)
+    translated = model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS)
+    return [tokenizer.decode(t, skip_special_tokens=True) for t in translated]
 
 def translate_blocks(blocks):
     # ---- 1. Aplatir toutes les pages ----
@@ -55,10 +65,17 @@ def translate_blocks(blocks):
     # ---- 3. Traduction en parallèle ----
     all_translations = [None] * len(flat_texts)
 
-    for n_batch, (start_idx, batch_texts) in enumerate(batches, start=1):
-        batch_translations = translate_batch(batch_texts)
-        all_translations[start_idx:start_idx + len(batch_translations)] = batch_translations
-        print(f"  - Batch {n_batch}/{len(batches)} terminé ({round(n_batch/len(batches)*100, 2)}%)")
+    n_batch = 0
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_idx = {executor.submit(translate_batch, batch): idx for idx, batch in batches}
+        
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            batch_translations = future.result()
+            all_translations[idx:idx+len(batch_translations)] = batch_translations
+            n_batch += 1
+            print(f"  - Batch {n_batch}/{len(batches)} terminé ({round(n_batch/len(batches)*100, 2)}%)")
 
     # ---- 4. Reconstruction des pages ----
     translated_pages = [[] for _ in range(len(blocks))]
