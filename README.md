@@ -27,8 +27,10 @@ L'objectif est de rendre la traduction de documents aussi simple et rapide que p
   - Préservation du formatage
   - [ToDo]() : ~~Support de multiples langues~~
 - Scripts de traitement par lot
-  - Traduction multithread pour optimiser les performances
+  - Traduction multithread pour optimiser les performances(*)
   - [ToDo]() : ~~Support des gros volumes de documents~~
+
+**Le multithread est désactivé pour Streamlit Cloud et est uniquement disponible en local.*
 
 ## 🖥️ Interface graphique
 
@@ -73,7 +75,15 @@ Yellow Traduction/
 Le projet est prévu pour être déployé :
 
 - Via Docker pour une containerisation simple et reproductible
+```shell
+$ docker build -t streamlit-dashboard .
+$ docker run -p 8501:8501 streamlit-dashboard
+```
 - Directement sur serveur en exécutant l'application Streamlit
+
+```shell
+$ streamlit run streamlit_app.py 
+```
 
 ### Environnement
 
