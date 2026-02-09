@@ -57,6 +57,7 @@ caption = (
     f"• Arch : {platform.machine()} "
     f"• CPU : {platform.processor() or 'N/A'} "
     f"• Cœurs : {os.cpu_count()} "
+    f"• Swap : {round(psutil.swap_memory().total / (1024**3), 2)} GB "
     f"• RAM : {round(psutil.virtual_memory().total / (1024**3), 2)} GB "
     f"• Python : {platform.python_version()}"
 )
