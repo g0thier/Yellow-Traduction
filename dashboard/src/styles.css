@@ -1,0 +1,19 @@
+    h1 {
+        position: relative;
+        display: inline-block;
+        z-index: 1;
+    }
+
+    h1::after {
+        content: "";
+        position: absolute;
+        left: -0.05em;
+        bottom: 0.30em;
+        width: 96%;
+        height: 0.65em;
+        background: rgba(255, 255, 0, 0.9);
+        z-index: -1;
+        transform: rotate(-1deg);
+        border-radius: 0.45em 0.6em 0.5em 0.35em;
+        filter: blur(0.8px);
+    }

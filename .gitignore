@@ -13,3 +13,6 @@
 
 # macOS cache folders
 __MACOSX
+
+# Python
+__pycache__/
