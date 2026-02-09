@@ -1,15 +1,11 @@
 from io import BytesIO
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import logging
 import torch
 from transformers import MarianTokenizer, MarianMTModel
 import fitz  # PyMuPDF
 
 # CONSTANTES
-
-# Logging (Streamlit Cloud friendly)
-logger = logging.getLogger(__name__)
 
 # Choix auto du device
 if torch.backends.mps.is_available():
@@ -30,33 +26,41 @@ model  = MarianMTModel.from_pretrained(MODEL_NAME).to(DEVICE).eval()
 
 # Détecter nb de cœurs dispo et en garder 1 pour le système
 MAX_WORKERS = max(1, os.cpu_count() - 1)
-logger.info(
-    "Utilisation de %s threads pour la traduction (sur %s coeurs disponibles)",
-    MAX_WORKERS,
-    os.cpu_count(),
-)
+print(f"⚡ Utilisation de {MAX_WORKERS} threads pour la traduction (sur {os.cpu_count()} cœurs disponibles)")
 
 # FONCTIONS
 
 # Extraction du texte d'un PDF en blocs (coordonnées + texte)
 def extract_text_blocks(doc):
-    # Extraction des blocs de texte
-    pages_text = []
-    for page in doc:
-        blocks = page.get_text("blocks")  # [(x0,y0,x1,y1,"texte",bloc_num,...)]
-        page_blocks = []
-        for b in blocks:
-            text = b[4].strip()
-            if len(text) >= 4:  # on ignore les bouts trop courts
-                page_blocks.append((b[:4], text))  # coordonnées + texte
-        pages_text.append(page_blocks)
-    return pages_text
+    try:
+        # Extraction des blocs de texte
+        pages_text = []
+        for page_idx, page in enumerate(doc):
+            try:
+                blocks = page.get_text("blocks")  # [(x0,y0,x1,y1,"texte",bloc_num,...)]
+                page_blocks = []
+                for b in blocks:
+                    text = b[4].strip()
+                    if len(text) >= 4:  # on ignore les bouts trop courts
+                        page_blocks.append((b[:4], text))  # coordonnées + texte
+                pages_text.append(page_blocks)
+            except Exception as e:
+                print(f"⚠️ Erreur lors de l'extraction de la page {page_idx} : {e}, page ignorée")
+                pages_text.append([])  # page vide
+        return pages_text
+    except Exception as e:
+        print(f"❌ Erreur critique lors de l'extraction du texte : {e}")
+        return []
 
 def translate_batch(batch):
     """Traduit un batch de textes (utilise le modèle global, partagé en RAM)."""
-    inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(DEVICE)
-    translated = model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS)
-    return [tokenizer.decode(t, skip_special_tokens=True) for t in translated]
+    try:
+        inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(DEVICE)
+        translated = model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS)
+        return [tokenizer.decode(t, skip_special_tokens=True) for t in translated]
+    except Exception as e:
+        print(f"❌ Erreur lors de la traduction d'un batch : {e}")
+        return batch  # Retourner le texte original en cas d'erreur
 
 def translate_blocks(blocks):
     # ---- 1. Aplatir toutes les pages ----
@@ -65,10 +69,7 @@ def translate_blocks(blocks):
         for coords, text in page_blocks:
             flat_texts.append((page_idx, coords, text))
 
-    logger.info(
-        "Total de %s blocs de texte a traduire (toutes pages confondues)",
-        len(flat_texts),
-    )
+    print(f"➡️ Total de {len(flat_texts)} blocs de texte à traduire (toutes pages confondues)")
 
     # ---- 2. Créer des batches globaux ----
     batches = [(i, [t[2] for t in flat_texts[i:i+BATCH_SIZE]]) for i in range(0, len(flat_texts), BATCH_SIZE)]
@@ -83,15 +84,15 @@ def translate_blocks(blocks):
         
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
-            batch_translations = future.result()
-            all_translations[idx:idx+len(batch_translations)] = batch_translations
-            n_batch += 1
-            logger.info(
-                "Batch %s/%s termine (%.2f%%)",
-                n_batch,
-                len(batches),
-                round(n_batch / len(batches) * 100, 2),
-            )
+            try:
+                batch_translations = future.result()
+                all_translations[idx:idx+len(batch_translations)] = batch_translations
+                n_batch += 1
+                print(f"  - Batch {n_batch}/{len(batches)} terminé ({round(n_batch/len(batches)*100, 2)}%)")
+            except Exception as e:
+                print(f"❌ Erreur lors du traitement d'un batch : {e}")
+                n_batch += 1
+                # Garder les valeurs None pour ce batch
 
     # ---- 4. Reconstruction des pages ----
     translated_pages = [[] for _ in range(len(blocks))]
@@ -99,8 +100,8 @@ def translate_blocks(blocks):
     for (page_idx, coords, _), trans in zip(flat_texts, all_translations):
         translated_pages[page_idx].append((coords, trans))
 
-    logger.info("Traduction terminee : %s pages traitees", len(translated_pages))
-    logger.debug("Exemple traduction premiere page : %s", translated_pages[0][:3])
+    print(f"\n✅ Traduction terminée : {len(translated_pages)} pages traitées")
+    print("\nExemple traduction première page :", translated_pages[0][:3])
     return translated_pages
 
 # Tailles de police à tester pour la mise en page 
@@ -114,55 +115,74 @@ sizes = (
 
 # Trouve la plus grande taille de police qui rentre dans rect (binary search).
 def best_font_size(page, rect, text, sizes):
-    lo, hi = 0, len(sizes) - 1
-    best = sizes[-1]
+    try:
+        lo, hi = 0, len(sizes) - 1
+        best = sizes[-1]
 
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        font_size = sizes[mid]
-        rc = page.insert_textbox(
-            rect,
-            text,
-            fontsize=font_size,
-            color=(0, 0, 0),
-            align=3,
-            render_mode=3  # mesure uniquement
-        )
-        if rc >= 0:  # le texte tient
-            best = font_size
-            hi = mid - 1
-        else:  # trop grand → réduire
-            lo = mid + 1
-    return best
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            font_size = sizes[mid]
+            try:
+                rc = page.insert_textbox(
+                    rect,
+                    text,
+                    fontsize=font_size,
+                    color=(0, 0, 0),
+                    align=3,
+                    render_mode=3  # mesure uniquement
+                )
+                if rc >= 0:  # le texte tient
+                    best = font_size
+                    hi = mid - 1
+                else:  # trop grand → réduire
+                    lo = mid + 1
+            except Exception:
+                # Si l'insertion échoue, on réduit la taille
+                lo = mid + 1
+        return best
+    except Exception as e:
+        print(f"⚠️ Erreur lors du calcul de font size : {e}, utilisation de taille par défaut")
+        return 12  # taille par défaut
 
 def create_translated_pdf(doc, translated_pages, output_path):
-    # ---- Application séquentielle ----
-    for page_index, page in enumerate(doc):
-        logger.info("Traitement page %s/%s", page_index + 1, len(doc))
-        blocks = translated_pages[page_index]
+    try:
+        # ---- Application séquentielle ----
+        for page_index, page in enumerate(doc):
+            try:
+                print(f"📄 Traitement page {page_index+1}/{len(doc)}")
+                blocks = translated_pages[page_index]
 
-        for coords, text in blocks:
-            rect = fitz.Rect(coords)
-            font_size = best_font_size(page, rect, text, sizes)
-            logger.debug("Bloc %s : font size optimale = %s", coords, font_size)
+                for coords, text in blocks:
+                    try:
+                        rect = fitz.Rect(coords)
+                        font_size = best_font_size(page, rect, text, sizes)
+                        print(f"  - Bloc {coords} : font size optimale = {font_size}")
 
-            # dessiner rectangle jaune
-            page.draw_rect(rect, color=(1, 1, 0),
-                        fill=(1, 1, 0),
-                        fill_opacity=0.9,
-                        overlay=True)
+                        # dessiner rectangle jaune
+                        page.draw_rect(rect, color=(1, 1, 0),
+                                    fill=(1, 1, 0),
+                                    fill_opacity=0.9,
+                                    overlay=True)
 
-            # insérer texte à la bonne taille
-            page.insert_textbox(
-                rect,
-                text,
-                fontsize=font_size,
-                color=(0, 0, 0),
-                align=3
-            )
+                        # insérer texte à la bonne taille
+                        page.insert_textbox(
+                            rect,
+                            text,
+                            fontsize=font_size,
+                            color=(0, 0, 0),
+                            align=3
+                        )
+                    except Exception as e:
+                        print(f"⚠️ Erreur lors du traitement du bloc {coords} : {e}, bloc ignoré")
+                        continue
+            except Exception as e:
+                print(f"⚠️ Erreur lors du traitement de la page {page_index} : {e}, page ignorée")
+                continue
 
-    logger.info("Mise en page terminee, sauvegarde du PDF traduit...")
-    doc.save(output_path)
+        print(f"\n✅ Mise en page terminée, sauvegarde du PDF traduit...")
+        doc.save(output_path)
+    except Exception as e:
+        print(f"❌ Erreur lors de la création du PDF traduit : {e}")
 
 
 def translate(uploaded_file)->BytesIO|None:
@@ -228,5 +248,6 @@ def translate(uploaded_file)->BytesIO|None:
         
         return output_bytes
 
-    except Exception:
+    except Exception as e:
+        print(f"❌ Erreur lors de la traduction du PDF : {e}")
         return None
