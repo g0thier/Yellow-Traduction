@@ -1,4 +1,6 @@
 import os
+import platform
+import psutil
 from pathlib import Path
 import streamlit as st
 from src.translate import translate
@@ -48,7 +50,15 @@ if uploaded_file is not None:
     else:
         st.error("Erreur lors de la traduction du fichier.")
 
-st.caption(
-    f"{'☁️ Cloud' if os.getenv('STREAMLIT_CLOUD') == 'true' else '💻 Local'} "
-    f"• CPU : {os.cpu_count()} cœurs"
+
+
+caption = (
+    f"OS : {platform.system()} {platform.release()} "
+    f"• Arch : {platform.machine()} "
+    f"• CPU : {platform.processor() or 'N/A'} "
+    f"• Cœurs : {os.cpu_count()} "
+    f"• RAM : {round(psutil.virtual_memory().total / (1024**3), 2)} GB "
+    f"• Python : {platform.python_version()}"
 )
+
+st.caption(caption)
